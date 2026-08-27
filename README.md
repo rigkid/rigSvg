@@ -2,12 +2,12 @@
 
 ![preview](examples/svg/img/preview.png)
 
-SVG to `ParsedPathDoc` — layers of `CPaths` plus the doc `CPaintLibrary`.
+SVG to `ParsedPathDoc` - layers of `CPaths` plus the doc `CPaintLibrary`.
 
-**Import:** `path` (M/L/H/V/C/S/Q/T/A/Z — arcs stay A, smooth S/T), `line`, `rect`,
+**Import:** `path` (M/L/H/V/C/S/Q/T/A/Z - arcs stay A, smooth S/T), `line`, `rect`,
 `circle`, `ellipse`, `polyline`, `polygon`, nested `g` layers, `transform`, root
 `viewBox`, fill/stroke colours, `stroke-width`, `<linearGradient>` /
-`<radialGradient>` via `url(#…)`.
+`<radialGradient>` via `url(#...)`.
 
 **Export:** groups per layer, solid fill/stroke, gradient defs (OkLab/HSV densify
 to sRGB stops; intensity bakes in linear light and clamps), analytic `A`.

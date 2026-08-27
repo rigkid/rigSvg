@@ -355,7 +355,7 @@ bool writeString(const plot::ParsedPathDoc& doc, float paperWMm, float paperHMm,
 	std::ostringstream defs;
 	std::ostringstream body;
 	int nextGradId = 0;
-	// Cache: paintIndex + quantized bounds → emitted svg id (shared defs when possible).
+	// Cache: paintIndex + quantized bounds to emitted svg id (shared defs when possible).
 	std::unordered_map<std::string, std::string> emitted;
 
 	auto gradUrl = [&](int32_t paintIndex, const plot::PathBounds& b) -> std::string {

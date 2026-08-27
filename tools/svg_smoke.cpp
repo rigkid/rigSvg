@@ -315,7 +315,7 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// OkLab densify + intensity clamp: extra stops, channels stay in 0–1.
+	// OkLab densify + intensity clamp: extra stops, channels stay in 0-1.
 	{
 		rigkit::plot::ParsedPathDoc gdoc;
 		rigkit::ecs::CPath box;

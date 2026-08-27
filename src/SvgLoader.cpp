@@ -30,7 +30,7 @@ struct Mat2d {
 		return {a * p.x + c * p.y + e, b * p.x + d * p.y + f};
 	}
 
-	/** @brief Average axis length — SVG stroke-width follows the CTM. */
+	/** @brief Average axis length - SVG stroke-width follows the CTM. */
 	float strokeScale() const {
 		const float sx = std::sqrt(a * a + b * b);
 		const float sy = std::sqrt(c * c + d * d);
@@ -789,7 +789,7 @@ bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
 			continue;
 		}
 		if (isTag(tag, "g")) {
-			// Nested groups inherit paint/transform but stay on the same layer —
+			// Nested groups inherit paint/transform but stay on the same layer  - 
 			// Ghostscript Tiger has hundreds of fill-only <g> wrappers per path.
 			const std::string name = (groups.size() <= 1) ? layerNameFromGroup(tag) : groups.top();
 			groups.push(name);

@@ -96,7 +96,7 @@ void SvgApp::update(float dt) {
 	m_time += dt;
 
 	// A gentle breathe around the window centre. Motion is one CTransform
-	// write on the root — SHierarchy and the present path do the rest.
+	// write on the root - SHierarchy and the present path do the rest.
 	const float zoom = 1.f + 0.05f * std::sin(m_time * 0.8f);
 	auto& xf = ecs->getComponent<rigkit::ecs::CTransform>(m_tiger);
 	xf.scale = {zoom, zoom, 1.f};

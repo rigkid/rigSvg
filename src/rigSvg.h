@@ -4,7 +4,7 @@
 namespace rigkit {
 
 /**
- * @brief SVG import/export pack — ParsedPathDoc / CPaths + paints.
+ * @brief SVG import/export pack - ParsedPathDoc / CPaths + paints.
  * @details Depends on rigPlotComponent.
  */
 class rigSvg : public IPack {

@@ -2,7 +2,7 @@
   "name": "svg",
   "version": "0.1.0",
   "license": "MIT",
-  "description": "rigSvg example — load Ghostscript tiger (AGPL) and present fills",
+  "description": "rigSvg example - load Ghostscript tiger (AGPL) and present fills",
   "window": { "width": 960, "height": 720, "title": "rigSvg - tiger", "samples": 4 },
   "dependencies": [
     { "name": "rigComponent", "url": "https://github.com/rigkid/rigComponent.git", "ref": "main" },
