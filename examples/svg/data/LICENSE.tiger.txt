@@ -1,0 +1,17 @@
+Ghostscript tiger
+Copyright Ghostscript authors
+
+This file (tiger.svg) is free software under the GNU Affero General
+Public License, version 3 or any later version.
+
+Source:
+  https://commons.wikimedia.org/wiki/File:Ghostscript_tiger_(original_background).svg
+  tiger.eps / tiger.ps — GPL Ghostscript examples
+
+The shipped copy drops the paper rectangle (`#cccccc` viewBox fill) so the
+host clear colour shows through. The drawing is otherwise unchanged.
+
+License text:
+  https://www.gnu.org/licenses/agpl-3.0.html
+
+The rigSvg pack and example code remain MIT. This drawing is not.

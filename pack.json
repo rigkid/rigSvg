@@ -1,0 +1,19 @@
+{
+  "name": "rigSvg",
+  "url": "https://github.com/rigkid/rigSvg.git",
+  "ref": "main",
+  "version": "0.1.0",
+  "author": "Rigkid",
+  "license": "MIT Rigkid Contributors",
+  "description": "SVG import/export for ParsedPathDoc / CPaths (solids + gradients).",
+  "dependencies": [
+    {
+      "name": "rigPlotComponent",
+      "url": "https://github.com/rigkid/rigPlotComponent.git",
+      "ref": "main"
+    }
+  ],
+  "include_paths": [
+    "src"
+  ]
+}

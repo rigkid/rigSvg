@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <g id="Arcs">
+    <!-- semicircle via A -->
+    <path d="M20 40 A20 20 0 0 1 60 40" fill="none" stroke="#222" stroke-width="1"/>
+    <!-- smooth cubic S after C -->
+    <path d="M10 70 C20 50 40 50 50 70 S80 90 90 70" fill="none" stroke="#44a" stroke-width="1"/>
+    <!-- smooth quad T after Q -->
+    <path d="M70 20 Q85 5 100 20 T120 20" fill="none" stroke="#a44" stroke-width="1"/>
+  </g>
+</svg>

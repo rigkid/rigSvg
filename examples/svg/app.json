@@ -1,0 +1,14 @@
+{
+  "name": "svg",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "rigSvg example — load Ghostscript tiger (AGPL) and present fills",
+  "window": { "width": 960, "height": 720, "title": "rigSvg - tiger", "samples": 4 },
+  "dependencies": [
+    { "name": "rigComponent", "url": "https://github.com/rigkid/rigComponent.git", "ref": "main" },
+    { "name": "rigSystems", "url": "https://github.com/rigkid/rigSystems.git", "ref": "main" },
+    { "name": "rigPlotComponent", "url": "https://github.com/rigkid/rigPlotComponent.git", "ref": "main" },
+    { "name": "rigSvg", "url": "https://github.com/rigkid/rigSvg.git", "ref": "main" },
+    { "name": "rigVectorEditor", "url": "https://github.com/rigkid/rigVectorEditor.git", "ref": "main" }
+  ]
+}
