@@ -167,12 +167,58 @@ void recomputeBounds(plot::ParsedPathDoc& doc) {
 
 /** @brief Attr lookup that won't match trailing letters of other keys (e.g. id vs d). */
 std::string attrValue(const std::string& tag, const char* key) {
-	const std::string pattern =
-		std::string(R"((?:^|[^A-Za-z0-9_:\-]))") + key + R"(\s*=\s*["']([^"']*)["'])";
-	std::regex re(pattern, std::regex::icase);
-	std::smatch m;
-	if (std::regex_search(tag, m, re)) {
-		return m[1].str();
+	// Hand-rolled scan - std::regex on multi-10KB path tags stack-overflows (libstdc++).
+	if (!key || !*key || tag.empty()) {
+		return {};
+	}
+	const size_t keyLen = std::strlen(key);
+	auto isNameChar = [](unsigned char c) {
+		return std::isalnum(c) != 0 || c == '_' || c == ':' || c == '-';
+	};
+	for (size_t i = 0; i + keyLen + 3 <= tag.size(); ++i) {
+		bool boundary = (i == 0) || !isNameChar(static_cast<unsigned char>(tag[i - 1]));
+		if (!boundary) {
+			continue;
+		}
+		bool match = true;
+		for (size_t k = 0; k < keyLen; ++k) {
+			const unsigned char a = static_cast<unsigned char>(tag[i + k]);
+			const unsigned char b = static_cast<unsigned char>(key[k]);
+			if (std::tolower(a) != std::tolower(b)) {
+				match = false;
+				break;
+			}
+		}
+		if (!match) {
+			continue;
+		}
+		size_t j = i + keyLen;
+		while (j < tag.size() && std::isspace(static_cast<unsigned char>(tag[j]))) {
+			++j;
+		}
+		if (j >= tag.size() || tag[j] != '=') {
+			continue;
+		}
+		++j;
+		while (j < tag.size() && std::isspace(static_cast<unsigned char>(tag[j]))) {
+			++j;
+		}
+		if (j >= tag.size()) {
+			return {};
+		}
+		const char quote = tag[j];
+		if (quote != '"' && quote != '\'') {
+			continue;
+		}
+		++j;
+		const size_t start = j;
+		while (j < tag.size() && tag[j] != quote) {
+			++j;
+		}
+		if (j >= tag.size()) {
+			return {};
+		}
+		return tag.substr(start, j - start);
 	}
 	return {};
 }
@@ -364,14 +410,79 @@ struct PaintSpec {
 	bool hasFillRule = false;
 };
 
-/** @brief Parse only attributes present on @p tag (for inheritance merge). */
-PaintSpec paintOverridesFromTag(const std::string& tag) {
+/** @brief Merge class= bodies from a simple CSS class map (CorelDRAW / Illustrator). */
+std::string classStyleBody(const std::string& tag,
+						   const std::unordered_map<std::string, std::string>& classes) {
+	if (classes.empty()) {
+		return {};
+	}
+	const std::string raw = attrValue(tag, "class");
+	if (raw.empty()) {
+		return {};
+	}
+	std::string out;
+	std::string token;
+	auto flush = [&] {
+		if (token.empty()) {
+			return;
+		}
+		const auto it = classes.find(token);
+		if (it != classes.end() && !it->second.empty()) {
+			if (!out.empty() && out.back() != ';') {
+				out.push_back(';');
+			}
+			out += it->second;
+		}
+		token.clear();
+	};
+	for (char c : raw) {
+		if (std::isspace(static_cast<unsigned char>(c))) {
+			flush();
+		} else {
+			token.push_back(c);
+		}
+	}
+	flush();
+	return out;
+}
+
+/** @brief Parse `.name { decls }` rules out of a `<style>` block (CDATA ok). */
+void parseCssClasses(std::string css, std::unordered_map<std::string, std::string>& out) {
+	const size_t cdata = css.find("<![CDATA[");
+	if (cdata != std::string::npos) {
+		css.erase(0, cdata + 9);
+	}
+	const size_t endCdata = css.find("]]>");
+	if (endCdata != std::string::npos) {
+		css.erase(endCdata);
+	}
+	static const std::regex re(R"(\.([A-Za-z_][\w-]*)\s*\{([^}]*)\})");
+	for (auto it = std::sregex_iterator(css.begin(), css.end(), re); it != std::sregex_iterator();
+		 ++it) {
+		out[(*it)[1].str()] = (*it)[2].str();
+	}
+}
+
+/**
+ * @brief Parse only paint overrides present on @p tag (for inheritance merge).
+ * @details Cascade: inline style= > presentation attrs > class= stylesheet rules.
+ */
+PaintSpec paintOverridesFromTag(const std::string& tag,
+								const std::unordered_map<std::string, std::string>& classes) {
 	PaintSpec p;
 	const std::string style = attrValue(tag, "style");
+	const std::string classStyle = classStyleBody(tag, classes);
 	auto get = [&](const char* key) {
-		std::string v = attrValue(tag, key);
-		if (v.empty() && !style.empty()) {
+		// style attribute wins, then presentation attribute, then class rules.
+		std::string v;
+		if (!style.empty()) {
 			v = styleProp(style, key);
+		}
+		if (v.empty()) {
+			v = attrValue(tag, key);
+		}
+		if (v.empty() && !classStyle.empty()) {
+			v = styleProp(classStyle, key);
 		}
 		return v;
 	};
@@ -626,12 +737,13 @@ ecs::CPath makePoly(const std::string& points, bool closed) {
 
 bool tryShape(const std::string& tag, plot::ParsedPathDoc& doc, const std::string& layer,
 			  const Mat2d& parentXform, const PaintSpec& parentPaint,
+			  const std::unordered_map<std::string, std::string>& classes,
 			  const std::unordered_map<std::string, SvgGradDef>& grads,
 			  std::unordered_map<std::string, int>& gradIds) {
 	Mat2d local;
 	parseMat2d(attrValue(tag, "transform"), local);
 	const Mat2d xform = parentXform.then(local);
-	const PaintSpec paint = resolvePaint(parentPaint, paintOverridesFromTag(tag));
+	const PaintSpec paint = resolvePaint(parentPaint, paintOverridesFromTag(tag, classes));
 
 	auto push = [&](ecs::CPath path) {
 		appendPaintedPath(doc, layer, std::move(path), xform, paint, grads, gradIds);
@@ -710,6 +822,7 @@ bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
 
 	std::unordered_map<std::string, SvgGradDef> grads;
 	std::unordered_map<std::string, int> gradIds;
+	std::unordered_map<std::string, std::string> cssClasses;
 	SvgGradDef curGrad;
 	bool inGrad = false;
 
@@ -725,12 +838,29 @@ bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
 			i = end == std::string::npos ? svgText.size() : end + 3;
 			continue;
 		}
+		// Bare CDATA (outside <style>) - skip so `>` inside does not become a fake tag.
+		if (i + 9 <= svgText.size() && svgText.compare(i, 9, "<![CDATA[") == 0) {
+			const size_t end = svgText.find("]]>", i + 9);
+			i = end == std::string::npos ? svgText.size() : end + 3;
+			continue;
+		}
 		const size_t end = svgText.find('>', i);
 		if (end == std::string::npos) {
 			break;
 		}
 		const std::string tag = svgText.substr(i, end - i + 1);
 		i = end + 1;
+
+		if (isTag(tag, "style")) {
+			const size_t close = svgText.find("</style", i);
+			if (close == std::string::npos) {
+				break;
+			}
+			parseCssClasses(svgText.substr(i, close - i), cssClasses);
+			const size_t after = svgText.find('>', close);
+			i = after == std::string::npos ? svgText.size() : after + 1;
+			continue;
+		}
 
 		if (startsWithTag(tag, 1, "/linearGradient") || startsWithTag(tag, 1, "/radialGradient")) {
 			if (inGrad && !curGrad.id.empty()) {
@@ -796,7 +926,7 @@ bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
 			Mat2d local;
 			parseMat2d(attrValue(tag, "transform"), local);
 			xforms.push(xforms.top().then(local));
-			paints.push(resolvePaint(paints.top(), paintOverridesFromTag(tag)));
+			paints.push(resolvePaint(paints.top(), paintOverridesFromTag(tag, cssClasses)));
 			continue;
 		}
 		if (isTag(tag, "svg")) {
@@ -870,7 +1000,7 @@ bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
 			continue;
 		}
 
-		tryShape(tag, out, groups.top(), xforms.top(), paints.top(), grads, gradIds);
+		tryShape(tag, out, groups.top(), xforms.top(), paints.top(), cssClasses, grads, gradIds);
 	}
 
 	out.layers.erase(std::remove_if(out.layers.begin(), out.layers.end(),
