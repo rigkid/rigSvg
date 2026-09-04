@@ -735,6 +735,47 @@ ecs::CPath makePoly(const std::string& points, bool closed) {
 	return path;
 }
 
+/**
+ * @brief Parse `<image>` into an ImageItem on the current layer.
+ * @details Applies the CTM to both corners so translate/scale place correctly;
+ * rotation collapses to the transformed AABB (placed images stay axis-aligned).
+ * `data:` URIs are skipped - the POD keeps file references only.
+ */
+void tryImage(const std::string& tag, plot::ParsedPathDoc& doc, const std::string& layer,
+			  const Mat2d& parentXform) {
+	std::string href = attrValue(tag, "href");
+	if (href.empty()) {
+		href = attrValue(tag, "xlink:href");
+	}
+	if (href.empty() || href.rfind("data:", 0) == 0) {
+		return;
+	}
+	Mat2d local;
+	parseMat2d(attrValue(tag, "transform"), local);
+	const Mat2d xform = parentXform.then(local);
+	const float x = parseFloat(attrValue(tag, "x"));
+	const float y = parseFloat(attrValue(tag, "y"));
+	const float w = parseFloat(attrValue(tag, "width"));
+	const float h = parseFloat(attrValue(tag, "height"));
+	if (w <= 0.f || h <= 0.f) {
+		return;
+	}
+	const glm::vec2 p0 = xform.apply({x, y});
+	const glm::vec2 p1 = xform.apply({x + w, y + h});
+	ecs::ImageItem item;
+	item.href = href;
+	item.pos = {std::min(p0.x, p1.x), std::min(p0.y, p1.y)};
+	item.size = {std::abs(p1.x - p0.x), std::abs(p1.y - p0.y)};
+	std::string op = attrValue(tag, "opacity");
+	if (op.empty()) {
+		op = styleProp(attrValue(tag, "style"), "opacity");
+	}
+	if (!op.empty()) {
+		item.opacity = std::clamp(parseFloat(op, 1.f), 0.f, 1.f);
+	}
+	layerByName(doc, layer).images.push_back(std::move(item));
+}
+
 bool tryShape(const std::string& tag, plot::ParsedPathDoc& doc, const std::string& layer,
 			  const Mat2d& parentXform, const PaintSpec& parentPaint,
 			  const std::unordered_map<std::string, std::string>& classes,
@@ -997,14 +1038,23 @@ bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
 				out.contentH = canvasH;
 			}
 			xforms.top() = xforms.top().then(local);
+			// fill-rule and other presentation paint inherit from <svg>.
+			// CorelDRAW puts `fill-rule:evenodd` on the root style, not each path.
+			paints.top() = resolvePaint(paints.top(), paintOverridesFromTag(tag, cssClasses));
 			continue;
 		}
 
+		if (isTag(tag, "image")) {
+			tryImage(tag, out, groups.top(), xforms.top());
+			continue;
+		}
 		tryShape(tag, out, groups.top(), xforms.top(), paints.top(), cssClasses, grads, gradIds);
 	}
 
 	out.layers.erase(std::remove_if(out.layers.begin(), out.layers.end(),
-									[](const plot::PathSourceLayer& l) { return l.paths.empty(); }),
+									[](const plot::PathSourceLayer& l) {
+										return l.paths.empty() && l.images.empty();
+									}),
 					 out.layers.end());
 
 	if (out.layers.empty()) {

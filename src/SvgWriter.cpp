@@ -377,6 +377,18 @@ bool writeString(const plot::ParsedPathDoc& doc, float paperWMm, float paperHMm,
 
 	for (const auto& layer : doc.layers) {
 		body << "  <g id=\"" << esc(layer.name) << "\">\n";
+		for (const auto& img : layer.images) {
+			if (img.href.empty() || img.size.x <= 0.f || img.size.y <= 0.f) {
+				continue;
+			}
+			body << "    <image href=\"" << esc(img.href) << "\" x=\"" << img.pos.x << "\" y=\""
+				 << img.pos.y << "\" width=\"" << img.size.x << "\" height=\"" << img.size.y
+				 << "\" preserveAspectRatio=\"none\"";
+			if (img.opacity < 0.999f) {
+				body << " opacity=\"" << img.opacity << "\"";
+			}
+			body << "/>\n";
+		}
 		const auto& bag = layer.paths;
 		for (size_t i = 0; i < bag.paths.size(); ++i) {
 			if (bag.isTravel(i) || bag.paths[i].empty()) {

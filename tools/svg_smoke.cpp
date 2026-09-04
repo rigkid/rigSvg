@@ -256,6 +256,39 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	// CorelDRAW: fill-rule:evenodd on the root <svg> style, CSS class on the
+	// path, compound subpaths with no per-path fill-rule. Child nonzero wins.
+	{
+		const std::string corel =
+			"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\" "
+			"style=\"shape-rendering:geometricPrecision; fill-rule:evenodd; clip-rule:evenodd\">"
+			"<defs><style type=\"text/css\"><![CDATA[.fil0 {fill:#39B54A}]]></style></defs>"
+			"<g><path class=\"fil0\" d=\"M10 10 H90 V90 H10 Z M30 30 H70 V70 H30 Z\"/></g>"
+			"<path d=\"M0 0 H10 V10 H0 Z\" fill-rule=\"nonzero\"/>"
+			"</svg>";
+		rigkit::plot::ParsedPathDoc cd;
+		if (!rigkit::svg::loadString(corel, cd) || cd.layers.empty()) {
+			std::printf("svg_smoke FAIL corel fill-rule load\n");
+			return 1;
+		}
+		size_t paths = 0;
+		size_t evenOdd = 0;
+		for (const auto& layer : cd.layers) {
+			const auto& bag = layer.paths;
+			paths += bag.paths.size();
+			for (size_t i = 0; i < bag.paths.size(); ++i) {
+				if (bag.isEvenOdd(i)) {
+					++evenOdd;
+				}
+			}
+		}
+		if (paths != 2 || evenOdd != 1) {
+			std::printf("svg_smoke FAIL corel fill-rule paths=%zu evenOdd=%zu (want 2/1)\n", paths,
+						evenOdd);
+			return 1;
+		}
+	}
+
 	// Dawn Hummingbird showcase: layered groups, gradients, diverse fills,
 	// and evenodd compound paths (sun ring + flower center).
 	{

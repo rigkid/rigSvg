@@ -10,6 +10,7 @@ namespace svg {
  * @brief Load SVG into ParsedPathDoc (geometry + solid/gradient paints).
  * @details Supports path (M/L/H/V/C/S/Q/T/A/Z), line/rect/circle/ellipse/poly,
  * nested `g` layers, transforms, viewBox, fill/stroke colours, stroke-width,
+ * inherited `fill-rule` from `<svg>` / `<g>` (CorelDRAW root evenodd),
  * CSS `class=` rules from `<style>` (CorelDRAW), and `<linearGradient>` /
  * `<radialGradient>` via `url(#id)`. Arcs stay ArcTo.
  */
