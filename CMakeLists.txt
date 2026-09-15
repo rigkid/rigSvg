@@ -21,6 +21,8 @@ add_library(${PACK_NAME} STATIC
 	src/SvgWriter.h
 	src/SvgPathParser.cpp
 	src/SvgPathParser.h
+	src/SvgThumbnail.cpp
+	src/SvgThumbnail.h
 )
 target_link_libraries(${PACK_NAME} PUBLIC rigkit)
 if(TARGET rigPlotComponent)
@@ -28,6 +30,9 @@ if(TARGET rigPlotComponent)
 endif()
 target_include_directories(${PACK_NAME} PUBLIC
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/src>
+)
+target_include_directories(${PACK_NAME} PRIVATE
+	"${CMAKE_CURRENT_LIST_DIR}/third_party/nanosvg"
 )
 
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/tools/svg_smoke.cpp")

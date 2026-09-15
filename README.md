@@ -14,6 +14,8 @@ to sRGB stops; intensity bakes in linear light and clamps), analytic `A`.
 
 Depends on **rigPlotComponent**.
 
+When a host `IMui` is attached, the pack registers a `.svg` file-browser Icons decoder (NanoSVG CPU raster). Import/export is still `loadFile` / `writeFile`.
+
 ```cpp
 rigkit::plot::ParsedPathDoc doc;
 rigkit::svg::loadFile(path, doc);

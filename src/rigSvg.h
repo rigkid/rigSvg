@@ -12,6 +12,10 @@ class rigSvg : public IPack {
 	rigSvg();
 	bool init() override;
 	void setup() override;
+	void onUiAttached() override;
+
+  private:
+	void registerFileThumbnails();
 };
 
 } // namespace rigkit
