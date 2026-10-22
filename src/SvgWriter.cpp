@@ -358,6 +358,23 @@ bool writeString(const plot::ParsedPathDoc& doc, float paperWMm, float paperHMm,
 	// Cache: paintIndex + quantized bounds to emitted svg id (shared defs when possible).
 	std::unordered_map<std::string, std::string> emitted;
 
+	if (!doc.fontFaces.empty()) {
+		defs << "    <style type=\"text/css\">\n";
+		for (const auto& face : doc.fontFaces) {
+			defs << "      @font-face { font-family: " << esc(face.family) << "; src: url(\""
+				 << esc(face.href) << "\"); }\n";
+		}
+		defs << "    </style>\n";
+	}
+	for (const auto& clip : doc.clips) {
+		if (clip.id.empty() || clip.path.commands.empty()) {
+			continue;
+		}
+		defs << "    <clipPath id=\"" << esc(clip.id) << "\">\n";
+		defs << "      <path d=\"" << pathD(clip.path) << "\"/>\n";
+		defs << "    </clipPath>\n";
+	}
+
 	auto gradUrl = [&](int32_t paintIndex, const plot::PathBounds& b) -> std::string {
 		if (paintIndex < 0 || paintIndex >= static_cast<int>(doc.paints.gradients.size())) {
 			return {};
@@ -395,7 +412,14 @@ bool writeString(const plot::ParsedPathDoc& doc, float paperWMm, float paperHMm,
 				continue;
 			}
 			const plot::PathBounds b = plot::boundsOfPath(bag.paths[i]);
-			body << "    <path d=\"" << pathD(bag.paths[i]) << "\"";
+			body << "    <path";
+			if (i < bag.pathId.size() && !bag.pathId[i].empty()) {
+				body << " id=\"" << esc(bag.pathId[i]) << "\"";
+			}
+			body << " d=\"" << pathD(bag.paths[i]) << "\"";
+			if (i < bag.pathClipId.size() && !bag.pathClipId[i].empty()) {
+				body << " clip-path=\"url(#" << esc(bag.pathClipId[i]) << ")\"";
+			}
 
 			const bool filled = bag.isFilled(i);
 			const bool stroked = bag.isStroked(i);
@@ -446,6 +470,45 @@ bool writeString(const plot::ParsedPathDoc& doc, float paperWMm, float paperHMm,
 				body << " stroke=\"none\"";
 			}
 			body << "/>\n";
+		}
+		for (const auto& t : layer.texts.items) {
+			if (t.text.empty()) {
+				continue;
+			}
+			body << "    <text";
+			if (t.pathIndex < 0 && t.pathHref.empty()) {
+				body << " x=\"" << t.baseline.x << "\" y=\"" << t.baseline.y << "\"";
+			}
+			body << " font-size=\"" << t.size << "\" fill=\"" << colorCss(t.rgba) << "\"";
+			if (!t.fontPath.empty()) {
+				body << " font-family=\"" << esc(t.fontPath) << "\"";
+			}
+			if (t.anchor == ecs::TextItem::Anchor::Middle) {
+				body << " text-anchor=\"middle\"";
+			} else if (t.anchor == ecs::TextItem::Anchor::End) {
+				body << " text-anchor=\"end\"";
+			}
+			if (!t.clipId.empty()) {
+				body << " clip-path=\"url(#" << esc(t.clipId) << ")\"";
+			}
+			std::string href = t.pathHref;
+			if (href.empty() && t.pathIndex >= 0 &&
+				static_cast<size_t>(t.pathIndex) < bag.pathId.size()) {
+				href = bag.pathId[static_cast<size_t>(t.pathIndex)];
+			}
+			if (!href.empty()) {
+				body << ">\n      <textPath href=\"#" << esc(href) << "\"";
+				if (t.startOffset != 0.f) {
+					if (t.startOffsetMode == ecs::TextItem::OffsetMode::Ratio) {
+						body << " startOffset=\"" << (t.startOffset * 100.f) << "%\"";
+					} else {
+						body << " startOffset=\"" << t.startOffset << "\"";
+					}
+				}
+				body << ">" << esc(t.text) << "</textPath>\n    </text>\n";
+			} else {
+				body << ">" << esc(t.text) << "</text>\n";
+			}
 		}
 		body << "  </g>\n";
 	}

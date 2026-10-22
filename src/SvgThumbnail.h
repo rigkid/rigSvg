@@ -9,8 +9,10 @@ namespace svg {
 
 /**
  * @brief CPU raster of an SVG for file-browser Icons.
- * @details Long edge is capped at @p maxEdge. False when the file is missing,
- * too large, or NanoSVG cannot parse it. Not the document import path.
+ * @details Loads through SvgLoader, then paints PathFlatten contours and
+ * `TextItem` glyphs into an RGBA tile. Long edge is capped at @p maxEdge.
+ * Uses Blend2D only when that target is already linked; otherwise a coverage
+ * fill. No GL context and no UI pack.
  */
 bool rasterizeFileThumbnail(const std::string& pathUtf8, int maxEdge, int& w, int& h,
 							std::vector<std::uint8_t>& rgba);

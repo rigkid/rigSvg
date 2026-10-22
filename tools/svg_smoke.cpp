@@ -1,6 +1,10 @@
+#include "SvgDocument.h"
 #include "SvgLoader.h"
 #include "SvgPathParser.h"
+#include "SvgThumbnail.h"
 #include "SvgWriter.h"
+
+#include "core/util/AppPaths.h"
 
 #include <algorithm>
 #include <cmath>
@@ -385,6 +389,128 @@ int main(int argc, char** argv) {
 			std::printf("svg_smoke FAIL oklab intensity not clamped to opaque sRGB\n");
 			return 1;
 		}
+	}
+
+	// SVG > document > SVG: arc flags, text, textPath, clip, and font-face.
+	{
+		const fs::path round = fs::path(__FILE__).parent_path() / "fixtures" / "document-roundtrip.svg";
+		rigkit::plot::ParsedPathDoc src;
+		if (!rigkit::svg::loadFile(round.string(), src)) {
+			std::printf("svg_smoke FAIL document fixture load\n");
+			return 1;
+		}
+		bool sawArc = false;
+		bool sawHello = false;
+		bool sawAlong = false;
+		bool sawClip = false;
+		bool sawFace = false;
+		for (const auto& layer : src.layers) {
+			for (const auto& p : layer.paths.paths) {
+				for (const auto& cmd : p.commands) {
+					if (cmd.type == rigkit::ecs::CPath::Cmd::ArcTo && cmd.sweep && !cmd.largeArc) {
+						sawArc = true;
+					}
+				}
+			}
+			for (const auto& t : layer.texts.items) {
+				if (t.text == "Hello") {
+					sawHello = true;
+				}
+				if (t.text == "Along" && (!t.pathHref.empty() || t.pathIndex >= 0)) {
+					sawAlong = true;
+				}
+			}
+			for (const auto& id : layer.paths.pathClipId) {
+				if (id == "hole") {
+					sawClip = true;
+				}
+			}
+		}
+		for (const auto& clip : src.clips) {
+			if (clip.id == "hole") {
+				sawClip = true;
+			}
+		}
+		for (const auto& face : src.fontFaces) {
+			if (face.family == "Roboto") {
+				sawFace = true;
+			}
+		}
+		if (!sawArc || !sawHello || !sawAlong || !sawClip || !sawFace) {
+			std::printf("svg_smoke FAIL document load A=%d Hello=%d Along=%d clip=%d face=%d\n",
+						sawArc, sawHello, sawAlong, sawClip, sawFace);
+			return 1;
+		}
+		std::string json;
+		if (!rigkit::svg::writeDocument(src, json) || json.find("arc-to") == std::string::npos ||
+			json.find("Hello") == std::string::npos || json.find("hole") == std::string::npos ||
+			json.find("Roboto") == std::string::npos ||
+			json.find("text_path") == std::string::npos) {
+			std::printf("svg_smoke FAIL document write\n");
+			return 1;
+		}
+		{
+			const fs::path jsonOut = fs::temp_directory_path() / "rigSvg_document.json";
+			std::FILE* dump = std::fopen(jsonOut.string().c_str(), "wb");
+			if (dump) {
+				std::fputs(json.c_str(), dump);
+				std::fclose(dump);
+			}
+		}
+		rigkit::plot::ParsedPathDoc mid;
+		if (!rigkit::svg::readDocument(json, mid)) {
+			std::printf("svg_smoke FAIL document read\n");
+			return 1;
+		}
+		std::string xml;
+		if (!rigkit::svg::writeString(mid, 240.f, 120.f, xml) || xml.find("A20") == std::string::npos ||
+			xml.find("Hello") == std::string::npos || xml.find("hole") == std::string::npos ||
+			xml.find("Roboto") == std::string::npos) {
+			std::printf("svg_smoke FAIL document SVG write\n");
+			return 1;
+		}
+		std::printf("svg_smoke document roundtrip ok\n");
+	}
+
+	// Icon tile must draw <text> even when the family name is not installed.
+	{
+		AppPaths::init(argc, argv);
+		const fs::path textSvg = fs::temp_directory_path() / "rigSvg_text_thumb.svg";
+		{
+			std::FILE* out = std::fopen(textSvg.string().c_str(), "wb");
+			if (!out) {
+				std::printf("svg_smoke FAIL text thumb open\n");
+				return 1;
+			}
+			const char* xml =
+				"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"240\" height=\"80\" "
+				"viewBox=\"0 0 240 80\">"
+				"<text x=\"8\" y=\"58\" font-size=\"48\" fill=\"#000\" "
+				"font-family=\"NotARealFont\">Hello</text>"
+				"</svg>";
+			std::fputs(xml, out);
+			std::fclose(out);
+		}
+		int tw = 0;
+		int th = 0;
+		std::vector<std::uint8_t> pixels;
+		if (!rigkit::svg::rasterizeFileThumbnail(textSvg.string(), 80, tw, th, pixels) || tw < 1 ||
+			th < 1) {
+			std::printf("svg_smoke FAIL text thumb raster\n");
+			return 1;
+		}
+		size_t ink = 0;
+		for (size_t i = 3; i < pixels.size(); i += 4) {
+			if (pixels[i] > 16) {
+				++ink;
+			}
+		}
+		if (ink < 40) {
+			std::printf("svg_smoke FAIL text thumb ink=%zu (Roboto or a system face missing?)\n",
+						ink);
+			return 1;
+		}
+		std::printf("svg_smoke text thumb ok %dx%d ink=%zu\n", tw, th, ink);
 	}
 
 	std::printf("svg_smoke ok paths=%zu paints=%zu fillGrads=%zu strokeGrads=%zu roundtrip=%zu\n",

@@ -408,6 +408,8 @@ struct PaintSpec {
 	bool hasStroke = false;
 	bool hasStrokeWidth = false;
 	bool hasFillRule = false;
+	std::string clipUrl;
+	bool hasClip = false;
 };
 
 /** @brief Merge class= bodies from a simple CSS class map (CorelDRAW / Illustrator). */
@@ -540,6 +542,12 @@ PaintSpec paintOverridesFromTag(const std::string& tag,
 			p.hasFillRule = true;
 		}
 	}
+
+	const std::string clip = get("clip-path");
+	if (!clip.empty()) {
+		p.hasClip = true;
+		p.clipUrl = extractUrlId(clip);
+	}
 	return p;
 }
 
@@ -565,6 +573,10 @@ PaintSpec resolvePaint(const PaintSpec& parent, const PaintSpec& local) {
 	if (local.hasFillRule) {
 		out.evenOdd = local.evenOdd;
 		out.hasFillRule = true;
+	}
+	if (local.hasClip) {
+		out.clipUrl = local.clipUrl;
+		out.hasClip = true;
 	}
 	return out;
 }
@@ -632,7 +644,7 @@ int ensureGradient(plot::ParsedPathDoc& doc, const SvgGradDef& def, const plot::
 void appendPaintedPath(plot::ParsedPathDoc& doc, const std::string& layer, ecs::CPath path,
 					   const Mat2d& xform, const PaintSpec& paint,
 					   const std::unordered_map<std::string, SvgGradDef>& grads,
-					   std::unordered_map<std::string, int>& gradIds) {
+					   std::unordered_map<std::string, int>& gradIds, const std::string& id) {
 	transformPath(path, xform);
 	if (path.commands.empty()) {
 		return;
@@ -651,6 +663,8 @@ void appendPaintedPath(plot::ParsedPathDoc& doc, const std::string& layer, ecs::
 	bag.pathFillPaint.resize(i + 1, ecs::kPaintSolid);
 	bag.pathStrokePaint.resize(i + 1, ecs::kPaintSolid);
 	bag.pathFillRule.resize(i + 1, 0);
+	bag.pathClipId.resize(i + 1);
+	bag.pathId.resize(i + 1);
 
 	bag.pathFilled[i] = paint.filled ? 1 : 0;
 	bag.pathStroked[i] = paint.stroked ? 1 : 0;
@@ -658,6 +672,8 @@ void appendPaintedPath(plot::ParsedPathDoc& doc, const std::string& layer, ecs::
 	bag.pathColors[i] = paint.fillColor;
 	bag.pathStrokeColors[i] = paint.strokeColor;
 	bag.pathStrokeWidths[i] = paint.strokeWidth * std::max(1e-6f, xform.strokeScale());
+	bag.pathClipId[i] = paint.clipUrl;
+	bag.pathId[i] = id;
 
 	if (paint.filled && !paint.fillUrl.empty()) {
 		auto git = grads.find(paint.fillUrl);
@@ -787,7 +803,8 @@ bool tryShape(const std::string& tag, plot::ParsedPathDoc& doc, const std::strin
 	const PaintSpec paint = resolvePaint(parentPaint, paintOverridesFromTag(tag, classes));
 
 	auto push = [&](ecs::CPath path) {
-		appendPaintedPath(doc, layer, std::move(path), xform, paint, grads, gradIds);
+		appendPaintedPath(doc, layer, std::move(path), xform, paint, grads, gradIds,
+						  attrValue(tag, "id"));
 	};
 
 	if (isTag(tag, "path")) {
@@ -850,6 +867,232 @@ void beginGradient(const std::string& tag, bool radial, SvgGradDef& cur, bool& a
 	active = true;
 }
 
+std::string xmlUnescape(std::string s) {
+	auto repl = [&](const char* from, const char* to) {
+		const size_t n = std::strlen(from);
+		const size_t m = std::strlen(to);
+		size_t p = 0;
+		while ((p = s.find(from, p)) != std::string::npos) {
+			s.replace(p, n, to);
+			p += m;
+		}
+	};
+	repl("&amp;", "&");
+	repl("&lt;", "<");
+	repl("&gt;", ">");
+	repl("&quot;", "\"");
+	repl("&apos;", "'");
+	return s;
+}
+
+std::string stripTags(const std::string& inner) {
+	std::string out;
+	out.reserve(inner.size());
+	bool inTag = false;
+	for (char c : inner) {
+		if (c == '<') {
+			inTag = true;
+		} else if (c == '>') {
+			inTag = false;
+		} else if (!inTag) {
+			out.push_back(c);
+		}
+	}
+	return xmlUnescape(out);
+}
+
+std::string trimCopy(std::string s) {
+	while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) {
+		s.erase(s.begin());
+	}
+	while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
+		s.pop_back();
+	}
+	return s;
+}
+
+std::string stripQuotes(std::string s) {
+	s = trimCopy(std::move(s));
+	if (s.size() >= 2 && ((s.front() == '"' && s.back() == '"') ||
+						  (s.front() == '\'' && s.back() == '\''))) {
+		return s.substr(1, s.size() - 2);
+	}
+	return s;
+}
+
+std::string extractHrefUrl(const std::string& v) {
+	std::regex re(R"(url\(\s*['\"]?([^)'\"]+)['\"]?\s*\))", std::regex::icase);
+	std::smatch m;
+	if (std::regex_search(v, m, re)) {
+		return trimCopy(m[1].str());
+	}
+	return {};
+}
+
+void parseFontFaces(std::string css, plot::ParsedPathDoc& doc) {
+	const size_t cdata = css.find("<![CDATA[");
+	if (cdata != std::string::npos) {
+		css.erase(0, cdata + 9);
+	}
+	const size_t endCdata = css.find("]]>");
+	if (endCdata != std::string::npos) {
+		css.erase(endCdata);
+	}
+	static const std::regex re(R"(@font-face\s*\{([^}]*)\})", std::regex::icase);
+	for (auto it = std::sregex_iterator(css.begin(), css.end(), re); it != std::sregex_iterator();
+		 ++it) {
+		const std::string body = (*it)[1].str();
+		plot::ParsedPathDoc::FontFace face;
+		face.family = stripQuotes(styleProp(body, "font-family"));
+		face.href = extractHrefUrl(styleProp(body, "src"));
+		if (!face.family.empty()) {
+			doc.fontFaces.push_back(std::move(face));
+		}
+	}
+}
+
+ecs::CPath shapeFromTag(const std::string& tag) {
+	if (isTag(tag, "path")) {
+		ecs::CPath path;
+		parsePathD(attrValue(tag, "d"), path);
+		return path;
+	}
+	if (isTag(tag, "line")) {
+		return makeLine(parseFloat(attrValue(tag, "x1")), parseFloat(attrValue(tag, "y1")),
+						parseFloat(attrValue(tag, "x2")), parseFloat(attrValue(tag, "y2")));
+	}
+	if (isTag(tag, "rect")) {
+		return makeRect(parseFloat(attrValue(tag, "x")), parseFloat(attrValue(tag, "y")),
+						parseFloat(attrValue(tag, "width")), parseFloat(attrValue(tag, "height")));
+	}
+	if (isTag(tag, "circle")) {
+		const float r = parseFloat(attrValue(tag, "r"));
+		return makeEllipse(parseFloat(attrValue(tag, "cx")), parseFloat(attrValue(tag, "cy")), r, r);
+	}
+	if (isTag(tag, "ellipse")) {
+		return makeEllipse(parseFloat(attrValue(tag, "cx")), parseFloat(attrValue(tag, "cy")),
+						   parseFloat(attrValue(tag, "rx")), parseFloat(attrValue(tag, "ry")));
+	}
+	if (isTag(tag, "polyline")) {
+		return makePoly(attrValue(tag, "points"), false);
+	}
+	if (isTag(tag, "polygon")) {
+		return makePoly(attrValue(tag, "points"), true);
+	}
+	return {};
+}
+
+void appendTextItem(plot::ParsedPathDoc& doc, const std::string& layer, ecs::TextItem item) {
+	item.text = trimCopy(std::move(item.text));
+	if (item.text.empty()) {
+		return;
+	}
+	layerByName(doc, layer).texts.items.push_back(std::move(item));
+}
+
+bool tryText(const std::string& tag, const std::string& svgText, size_t& i,
+			 plot::ParsedPathDoc& doc, const std::string& layer, const Mat2d& parentXform,
+			 const PaintSpec& parentPaint,
+			 const std::unordered_map<std::string, std::string>& classes) {
+	if (!isTag(tag, "text")) {
+		return false;
+	}
+	const size_t close = svgText.find("</text", i);
+	std::string inner;
+	if (close == std::string::npos) {
+		i = svgText.size();
+	} else {
+		inner = svgText.substr(i, close - i);
+		const size_t after = svgText.find('>', close);
+		i = after == std::string::npos ? svgText.size() : after + 1;
+	}
+
+	Mat2d local;
+	parseMat2d(attrValue(tag, "transform"), local);
+	const Mat2d xform = parentXform.then(local);
+	const PaintSpec paint = resolvePaint(parentPaint, paintOverridesFromTag(tag, classes));
+
+	ecs::TextItem item;
+	item.text = stripTags(inner);
+	const std::string style = attrValue(tag, "style");
+	std::string size = attrValue(tag, "font-size");
+	if (size.empty()) {
+		size = styleProp(style, "font-size");
+	}
+	item.size = parseFloat(size, 16.f);
+	std::string family = attrValue(tag, "font-family");
+	if (family.empty()) {
+		family = styleProp(style, "font-family");
+	}
+	if (!family.empty()) {
+		const size_t comma = family.find(',');
+		item.fontPath = stripQuotes(comma == std::string::npos ? family : family.substr(0, comma));
+	}
+	item.rgba = paint.fillColor;
+	const float x = parseFloat(attrValue(tag, "x"));
+	const float y = parseFloat(attrValue(tag, "y"));
+	item.baseline = xform.apply({x, y});
+	std::string anchor = attrValue(tag, "text-anchor");
+	if (anchor.empty()) {
+		anchor = styleProp(style, "text-anchor");
+	}
+	anchor = toLower(anchor);
+	if (anchor == "middle") {
+		item.anchor = ecs::TextItem::Anchor::Middle;
+	} else if (anchor == "end") {
+		item.anchor = ecs::TextItem::Anchor::End;
+	}
+	item.clipId = paint.clipUrl;
+
+	const size_t tp = inner.find("<textPath");
+	if (tp != std::string::npos) {
+		const size_t gt = inner.find('>', tp);
+		if (gt != std::string::npos) {
+			const std::string tpTag = inner.substr(tp, gt - tp + 1);
+			std::string href = attrValue(tpTag, "href");
+			if (href.empty()) {
+				href = attrValue(tpTag, "xlink:href");
+			}
+			if (!href.empty() && href.front() == '#') {
+				href.erase(href.begin());
+			}
+			item.pathHref = href;
+			const std::string off = attrValue(tpTag, "startOffset");
+			if (!off.empty() && off.back() == '%') {
+				item.startOffset = parseFloat(off.substr(0, off.size() - 1)) / 100.f;
+				item.startOffsetMode = ecs::TextItem::OffsetMode::Ratio;
+			} else if (!off.empty()) {
+				item.startOffset = parseFloat(off);
+			}
+		}
+	}
+
+	appendTextItem(doc, layer, std::move(item));
+	return true;
+}
+
+void resolveTextPaths(plot::ParsedPathDoc& doc) {
+	for (auto& layer : doc.layers) {
+		for (auto& item : layer.texts.items) {
+			if (item.pathHref.empty() || item.pathIndex >= 0) {
+				continue;
+			}
+			for (auto& other : doc.layers) {
+				const auto& bag = other.paths;
+				for (size_t i = 0; i < bag.pathId.size(); ++i) {
+					if (bag.pathId[i] == item.pathHref) {
+						item.pathIndex = static_cast<int>(i);
+						break;
+					}
+				}
+				if (item.pathIndex >= 0) {
+					break;
+				}
+			}
+		}
+	}
+}
+
 } // namespace
 
 bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
@@ -866,6 +1109,9 @@ bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
 	std::unordered_map<std::string, std::string> cssClasses;
 	SvgGradDef curGrad;
 	bool inGrad = false;
+	bool inClip = false;
+	std::string clipId;
+	ecs::CPath clipPath;
 
 	size_t i = 0;
 	while (i < svgText.size()) {
@@ -897,7 +1143,9 @@ bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
 			if (close == std::string::npos) {
 				break;
 			}
-			parseCssClasses(svgText.substr(i, close - i), cssClasses);
+			const std::string css = svgText.substr(i, close - i);
+			parseCssClasses(css, cssClasses);
+			parseFontFaces(css, out);
 			const size_t after = svgText.find('>', close);
 			i = after == std::string::npos ? svgText.size() : after + 1;
 			continue;
@@ -1044,20 +1292,50 @@ bool loadString(const std::string& svgText, plot::ParsedPathDoc& out) {
 			continue;
 		}
 
+		if (isTag(tag, "clipPath") || isTag(tag, "clippath")) {
+			inClip = true;
+			clipId = attrValue(tag, "id");
+			clipPath = {};
+			continue;
+		}
+		if (startsWithTag(tag, 1, "/clipPath") || startsWithTag(tag, 1, "/clippath")) {
+			if (inClip && !clipPath.commands.empty()) {
+				out.clips.push_back({clipId, clipPath});
+			}
+			inClip = false;
+			clipId.clear();
+			clipPath = {};
+			continue;
+		}
+		if (inClip) {
+			ecs::CPath piece = shapeFromTag(tag);
+			if (!piece.commands.empty()) {
+				clipPath.commands.insert(clipPath.commands.end(), piece.commands.begin(),
+										 piece.commands.end());
+			}
+			continue;
+		}
+
 		if (isTag(tag, "image")) {
 			tryImage(tag, out, groups.top(), xforms.top());
+			continue;
+		}
+		if (tryText(tag, svgText, i, out, groups.top(), xforms.top(), paints.top(), cssClasses)) {
 			continue;
 		}
 		tryShape(tag, out, groups.top(), xforms.top(), paints.top(), cssClasses, grads, gradIds);
 	}
 
+	resolveTextPaths(out);
+
 	out.layers.erase(std::remove_if(out.layers.begin(), out.layers.end(),
 									[](const plot::PathSourceLayer& l) {
-										return l.paths.empty() && l.images.empty();
+										return l.paths.empty() && l.images.empty() &&
+											   l.texts.items.empty();
 									}),
 					 out.layers.end());
 
-	if (out.layers.empty()) {
+	if (out.layers.empty() && out.clips.empty() && out.fontFaces.empty()) {
 		return false;
 	}
 	recomputeBounds(out);
