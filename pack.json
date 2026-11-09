@@ -16,16 +16,6 @@
       "name": "rigTrueType",
       "url": "https://github.com/rigkid/rigTrueType.git",
       "ref": "main"
-    },
-    {
-      "name": "rigTrueType",
-      "url": "https://github.com/rigkid/rigTrueType.git",
-      "ref": "main"
-    },
-    {
-      "name": "rigTrueType",
-      "url": "https://github.com/rigkid/rigTrueType.git",
-      "ref": "main"
     }
   ],
   "include_paths": [

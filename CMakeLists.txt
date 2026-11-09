@@ -23,28 +23,6 @@ if(NOT TARGET rigTrueType)
 	endif()
 endif()
 
-if(NOT TARGET rigTrueType)
-	if(DEFINED RIGKIT_ROOT AND NOT RIGKIT_ROOT STREQUAL "")
-		set(_tt "${RIGKIT_ROOT}/packs/rigTrueType")
-	else()
-		set(_tt "${CMAKE_SOURCE_DIR}/packs/rigTrueType")
-	endif()
-	if(EXISTS "${_tt}/CMakeLists.txt")
-		add_subdirectory("${_tt}" "${CMAKE_BINARY_DIR}/packs/rigTrueType")
-	endif()
-endif()
-
-if(NOT TARGET rigTrueType)
-	if(DEFINED RIGKIT_ROOT AND NOT RIGKIT_ROOT STREQUAL "")
-		set(_tt "${RIGKIT_ROOT}/packs/rigTrueType")
-	else()
-		set(_tt "${CMAKE_SOURCE_DIR}/packs/rigTrueType")
-	endif()
-	if(EXISTS "${_tt}/CMakeLists.txt")
-		add_subdirectory("${_tt}" "${CMAKE_BINARY_DIR}/packs/rigTrueType")
-	endif()
-endif()
-
 add_library(${PACK_NAME} STATIC
 	src/rigSvg.cpp
 	src/rigSvg.h

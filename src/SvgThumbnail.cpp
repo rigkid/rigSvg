@@ -1,29 +1,16 @@
 #include "SvgThumbnail.h"
 
+#include "Face.h"
 #include "PathBounds.h"
 #include "PathFlatten.h"
 #include "SvgLoader.h"
-#include "core/util/AppPaths.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <vector>
-
-#ifdef RIGSVG_HAS_STB
-#define STB_TRUETYPE_IMPLEMENTATION
-#define STBTT_STATIC
-#ifdef RIGSVG_STB_IMGUI
-#include "imstb_truetype.h"
-#else
-#include "stb_truetype.h"
-#endif
-#endif
 
 #ifdef RIGSVG_HAS_BLEND2D
 #include <blend2d.h>
@@ -46,9 +33,8 @@ void putPixel(Tile& tile, int x, int y, const glm::vec4& c) {
 	if (x < 0 || y < 0 || x >= tile.w || y >= tile.h || c.a <= 0.f) {
 		return;
 	}
-	const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(tile.w) +
-					  static_cast<size_t>(x)) *
-					 4;
+	const size_t i =
+		(static_cast<size_t>(y) * static_cast<size_t>(tile.w) + static_cast<size_t>(x)) * 4;
 	const float sa = std::clamp(c.a, 0.f, 1.f);
 	const float da = tile.rgba[i + 3] / 255.f;
 	const float outA = sa + da * (1.f - sa);
@@ -174,57 +160,11 @@ const plot::ParsedPathDoc::Clip* findClip(const plot::ParsedPathDoc& doc, const 
 	return nullptr;
 }
 
-#ifdef RIGSVG_HAS_STB
-std::filesystem::path findFontFile(const std::string& name) {
-	namespace fs = std::filesystem;
-	std::error_code ec;
-	std::string file = name.empty() ? "Roboto-Regular.ttf" : name;
-	if (file.find('.') == std::string::npos) {
-		file += ".ttf";
-	}
-	const fs::path shipped = fs::path(AppPaths::getFontsDir()) / file;
-	if (fs::is_regular_file(shipped, ec)) {
-		return shipped;
-	}
-	const fs::path roboto = fs::path(AppPaths::getFontsDir()) / "Roboto-Regular.ttf";
-	if (fs::is_regular_file(roboto, ec)) {
-		return roboto;
-	}
-	fs::path dir = fs::path(AppPaths::getExecutableDir());
-	const fs::path rel = fs::path("data") / "fonts" / "Roboto-Regular.ttf";
-	for (int i = 0; i < 5 && !dir.empty(); ++i) {
-		if (fs::is_regular_file(dir / rel, ec)) {
-			return dir / rel;
-		}
-		if (fs::is_regular_file(dir / "bin" / rel, ec)) {
-			return dir / "bin" / rel;
-		}
-		dir = dir.parent_path();
-	}
-	return {};
-}
-
-bool loadFont(const std::string& name, std::vector<std::uint8_t>& bytes, stbtt_fontinfo& info) {
-	const auto path = findFontFile(name);
-	if (path.empty()) {
-		return false;
-	}
-	std::ifstream in(path, std::ios::binary);
-	if (!in) {
-		return false;
-	}
-	bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-	if (bytes.empty()) {
-		return false;
-	}
-	return stbtt_InitFont(&info, bytes.data(), 0) != 0;
-}
-
-void stampGlyph(Tile& tile, int x0, int y0, int gw, int gh, const unsigned char* bitmap,
+void stampGlyph(Tile& tile, int x0, int y0, const typeface::GlyphCover& cover,
 				const glm::vec4& color) {
-	for (int y = 0; y < gh; ++y) {
-		for (int x = 0; x < gw; ++x) {
-			const float a = bitmap[y * gw + x] / 255.f;
+	for (int y = 0; y < cover.h; ++y) {
+		for (int x = 0; x < cover.w; ++x) {
+			const float a = cover.a[static_cast<size_t>(y * cover.w + x)] / 255.f;
 			if (a <= 0.f) {
 				continue;
 			}
@@ -232,7 +172,6 @@ void stampGlyph(Tile& tile, int x0, int y0, int gw, int gh, const unsigned char*
 		}
 	}
 }
-#endif
 
 void drawFallbackText(Tile& tile, const ecs::TextItem& item) {
 	// 5x7 block letters so a missing face still leaves ink on a text tile.
@@ -260,58 +199,76 @@ void drawFallbackText(Tile& tile, const ecs::TextItem& item) {
 	}
 }
 
-void drawText(Tile& tile, const ecs::TextItem& item, void* fontPtr, bool haveFont) {
+void drawText(Tile& tile, const ecs::TextItem& item, const typeface::Face* face) {
 	if (item.text.empty()) {
 		return;
 	}
-#ifdef RIGSVG_HAS_STB
-	auto* font = static_cast<stbtt_fontinfo*>(fontPtr);
-	if (!haveFont || font == nullptr) {
+	if (!face) {
 		drawFallbackText(tile, item);
 		return;
 	}
-#else
-	(void)fontPtr;
-	(void)haveFont;
-	drawFallbackText(tile, item);
-	return;
-#endif
-#ifdef RIGSVG_HAS_STB
 	const float px = std::max(1.f, item.size * tile.scale);
-	const float scale = stbtt_ScaleForPixelHeight(font, px);
-	int ascent = 0;
-	stbtt_GetFontVMetrics(font, &ascent, nullptr, nullptr);
 	float x = item.baseline.x * tile.scale + tile.ox;
 	const float y = item.baseline.y * tile.scale + tile.oy;
-	if (item.anchor != ecs::TextItem::Anchor::Start) {
+	auto runWidth = [&](const std::string& s) {
 		float width = 0.f;
-		int advance = 0;
-		for (unsigned char ch : item.text) {
-			stbtt_GetCodepointHMetrics(font, ch, &advance, nullptr);
-			width += advance * scale;
+		int prev = 0;
+		const char* p = s.c_str();
+		const char* end = p + s.size();
+		while (p < end) {
+			const int code = typeface::nextUtf8(p, end);
+			if (code <= 0) {
+				break;
+			}
+			if (prev) {
+				width += typeface::kernCodepoints(*face, prev, code, px);
+			}
+			width += typeface::advanceCodepoint(*face, code, px);
+			prev = code;
 		}
-		if (item.anchor == ecs::TextItem::Anchor::Middle) {
-			x -= width * 0.5f;
-		} else {
-			x -= width;
+		return width;
+	};
+	if (item.anchor == ecs::TextItem::Anchor::Middle) {
+		x -= runWidth(item.text) * 0.5f;
+	} else if (item.anchor == ecs::TextItem::Anchor::End) {
+		x -= runWidth(item.text);
+	}
+	int prev = 0;
+	const char* p = item.text.c_str();
+	const char* end = p + item.text.size();
+	while (p < end) {
+		const int code = typeface::nextUtf8(p, end);
+		if (code <= 0) {
+			break;
+		}
+		if (prev) {
+			x += typeface::kernCodepoints(*face, prev, code, px);
+		}
+		typeface::GlyphCover cover;
+		if (typeface::stampCodepoint(*face, code, px, cover) && !cover.a.empty()) {
+			stampGlyph(tile, static_cast<int>(std::lround(x)) + cover.xoff,
+					   static_cast<int>(std::lround(y)) + cover.yoff, cover, item.rgba);
+		}
+		x += typeface::advanceCodepoint(*face, code, px);
+		prev = code;
+	}
+}
+
+void drawTexts(Tile& tile, const plot::ParsedPathDoc& doc) {
+	typeface::Face face;
+	std::string faceKey;
+	bool faceTried = false;
+	bool haveFace = false;
+	for (const auto& layer : doc.layers) {
+		for (const auto& t : layer.texts.items) {
+			if (!faceTried || t.fontPath != faceKey) {
+				haveFace = typeface::loadFace(t.fontPath, face);
+				faceKey = t.fontPath;
+				faceTried = true;
+			}
+			drawText(tile, t, haveFace ? &face : nullptr);
 		}
 	}
-	int advance = 0;
-	for (unsigned char ch : item.text) {
-		int xoff = 0;
-		int yoff = 0;
-		int gw = 0;
-		int gh = 0;
-		unsigned char* bitmap = stbtt_GetCodepointBitmap(font, scale, scale, ch, &gw, &gh, &xoff, &yoff);
-		if (bitmap) {
-			stampGlyph(tile, static_cast<int>(std::lround(x)) + xoff,
-					   static_cast<int>(std::lround(y)) + yoff, gw, gh, bitmap, item.rgba);
-			stbtt_FreeBitmap(bitmap, nullptr);
-		}
-		stbtt_GetCodepointHMetrics(font, ch, &advance, nullptr);
-		x += advance * scale;
-	}
-#endif
 }
 
 void fillPath(Tile& tile, const plot::ParsedPathDoc& doc, const ecs::CPaths& bag, size_t i) {
@@ -328,8 +285,10 @@ void fillPath(Tile& tile, const plot::ParsedPathDoc& doc, const ecs::CPaths& bag
 	}
 	const int minX = std::max(0, static_cast<int>(std::floor(b.minX * tile.scale + tile.ox)) - 2);
 	const int minY = std::max(0, static_cast<int>(std::floor(b.minY * tile.scale + tile.oy)) - 2);
-	const int maxX = std::min(tile.w - 1, static_cast<int>(std::ceil(b.maxX * tile.scale + tile.ox)) + 2);
-	const int maxY = std::min(tile.h - 1, static_cast<int>(std::ceil(b.maxY * tile.scale + tile.oy)) + 2);
+	const int maxX =
+		std::min(tile.w - 1, static_cast<int>(std::ceil(b.maxX * tile.scale + tile.ox)) + 2);
+	const int maxY =
+		std::min(tile.h - 1, static_cast<int>(std::ceil(b.maxY * tile.scale + tile.oy)) + 2);
 	const bool filled = bag.isFilled(i);
 	const bool stroked = bag.isStroked(i);
 	const float half = bag.strokeWidth(i, 1.f) * tile.scale * 0.5f;
@@ -393,8 +352,8 @@ bool rasterBlend2D(const plot::ParsedPathDoc& doc, Tile& tile) {
 				ctx.fillPath(path);
 			}
 			if (bag.isStroked(i)) {
-				const glm::vec4 solid = i < bag.pathStrokeColors.size() ? bag.pathStrokeColors[i]
-																		: layer.layerColor;
+				const glm::vec4 solid =
+					i < bag.pathStrokeColors.size() ? bag.pathStrokeColors[i] : layer.layerColor;
 				ctx.setStrokeStyle(toBl(solid));
 				ctx.setStrokeWidth(std::max(1.f, bag.strokeWidth(i, 1.f) * tile.scale));
 				ctx.strokePath(path);
@@ -415,9 +374,8 @@ bool rasterBlend2D(const plot::ParsedPathDoc& doc, Tile& tile) {
 			const std::uint8_t g = static_cast<std::uint8_t>(px >> 8);
 			const std::uint8_t r = static_cast<std::uint8_t>(px >> 16);
 			const std::uint8_t a = static_cast<std::uint8_t>(px >> 24);
-			const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(tile.w) +
-							  static_cast<size_t>(x)) *
-							 4;
+			const size_t i =
+				(static_cast<size_t>(y) * static_cast<size_t>(tile.w) + static_cast<size_t>(x)) * 4;
 			tile.rgba[i + 0] = r;
 			tile.rgba[i + 1] = g;
 			tile.rgba[i + 2] = b;
@@ -438,25 +396,7 @@ void rasterCoverage(const plot::ParsedPathDoc& doc, Tile& tile) {
 			fillPath(tile, doc, bag, i);
 		}
 	}
-#ifdef RIGSVG_HAS_STB
-	std::vector<std::uint8_t> fontBytes;
-	stbtt_fontinfo font{};
-	bool haveFont = false;
-	for (const auto& layer : doc.layers) {
-		for (const auto& t : layer.texts.items) {
-			if (!haveFont) {
-				haveFont = loadFont(t.fontPath, fontBytes, font);
-			}
-			drawText(tile, t, &font, haveFont);
-		}
-	}
-#else
-	for (const auto& layer : doc.layers) {
-		for (const auto& t : layer.texts.items) {
-			drawText(tile, t, nullptr, false);
-		}
-	}
-#endif
+	drawTexts(tile, doc);
 }
 
 bool measureDoc(const plot::ParsedPathDoc& doc, float& x0, float& y0, float& w, float& h) {
@@ -533,8 +473,8 @@ bool rasterizeFileThumbnail(const std::string& pathUtf8, int maxEdge, int& w, in
 		return false;
 	}
 	const float edge = std::max(srcW, srcH);
-	const float scale = (edge > static_cast<float>(maxEdge)) ? (static_cast<float>(maxEdge) / edge)
-															 : 1.f;
+	const float scale =
+		(edge > static_cast<float>(maxEdge)) ? (static_cast<float>(maxEdge) / edge) : 1.f;
 	Tile tile;
 	tile.w = std::max(1, static_cast<int>(srcW * scale + 0.5f));
 	tile.h = std::max(1, static_cast<int>(srcH * scale + 0.5f));
@@ -547,25 +487,7 @@ bool rasterizeFileThumbnail(const std::string& pathUtf8, int maxEdge, int& w, in
 	if (!rasterBlend2D(doc, tile)) {
 		rasterCoverage(doc, tile);
 	} else {
-#ifdef RIGSVG_HAS_STB
-		std::vector<std::uint8_t> fontBytes;
-		stbtt_fontinfo font{};
-		bool haveFont = false;
-		for (const auto& layer : doc.layers) {
-			for (const auto& t : layer.texts.items) {
-				if (!haveFont) {
-					haveFont = loadFont(t.fontPath, fontBytes, font);
-				}
-				drawText(tile, t, &font, haveFont);
-			}
-		}
-#else
-		for (const auto& layer : doc.layers) {
-			for (const auto& t : layer.texts.items) {
-				drawText(tile, t, nullptr, false);
-			}
-		}
-#endif
+		drawTexts(tile, doc);
 	}
 #else
 	rasterCoverage(doc, tile);
